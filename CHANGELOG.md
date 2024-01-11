@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.9.17](https://github.com/weichsel/ZIPFoundation/releases/tag/0.9.17)
+
+### Added
+ - Added visionOS support
+ - Added Xcode privacy manifest
+ - Added throwing initializers for `Archive`
+ 
+### Updated
+ - Improved symlink handling
+ - Improved forwarding of underlying errors
+
+## [0.9.16](https://github.com/weichsel/ZIPFoundation/releases/tag/0.9.16)
+
+### Added
+ - Added `isCompressed` accessor to `Entry`
+ 
+### Updated
+ - Improved README and documentation
+ - Fixed deprecation in the random test data generator
+
+## [0.9.15](https://github.com/weichsel/ZIPFoundation/releases/tag/0.9.15)
+
+### Added
+ - Added initial support for building for Android
+ 
+### Updated
+ - Fixed CRC32 calculation for non-final compression streams
+ - Fixed evaluation of CRC32 checksums when using `FileManager.unzipItem`
+
+## [0.9.14](https://github.com/weichsel/ZIPFoundation/releases/tag/0.9.14)
+
+### Updated
+ - Fixed missing extra field data after entry removal
+
+## [0.9.13](https://github.com/weichsel/ZIPFoundation/releases/tag/0.9.13)
+
+### Added
+ - Added large file support (ZIP64)
+ 
+### Updated
+ - Fixed an `UInt16` overflow when calculating the number of entries
+ - Fixed entry removal for in-memory archives
+ - Fixed a crash when `fopen()` fails during archive replacement
+ - Improved CRC32 calculation performance via zlib (when available)
+
+## [0.9.12](https://github.com/weichsel/ZIPFoundation/releases/tag/0.9.12)
+
+### Added
+ - Added check to disallow removal of entries from readonly archives
+ - Added guard against API misuse by providing zero byte buffer sizes
+ 
+### Updated
+ - Fixed an `UInt16` overflow when calculating the end of the central directory record
+ - Fixed detection of ZIP version required to extract
+ - Fixed missing consumer closure call for zero byte entries
+ - Fixed erroneous application of `.deflate` compression on `.symlink` and `.directory` entries
+ - Improved detection of `.directory` entries
+ - Improved performance when looking up entries via subscripting
+ - Improved consistency of URL format used in the Swift package description
+
 ## [0.9.11](https://github.com/weichsel/ZIPFoundation/releases/tag/0.9.11)
 
 ### Added

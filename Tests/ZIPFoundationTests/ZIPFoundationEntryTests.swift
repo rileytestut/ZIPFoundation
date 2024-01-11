@@ -2,7 +2,7 @@
 //  ZIPFoundationEntryTests.swift
 //  ZIPFoundation
 //
-//  Copyright © 2017-2020 Thomas Zoechling, https://www.peakstep.com and the ZIP Foundation project authors.
+//  Copyright © 2017-2023 Thomas Zoechling, https://www.peakstep.com and the ZIP Foundation project authors.
 //  Released under the MIT License.
 //
 //  See https://github.com/weichsel/ZIPFoundation/blob/master/LICENSE for license information.
@@ -12,6 +12,7 @@ import XCTest
 @testable import ZIPFoundation
 
 extension ZIPFoundationTests {
+
     func testEntryWrongDataLengthErrorConditions() {
         let emptyCDS = Entry.CentralDirectoryStructure(data: Data(),
                                                        additionalDataProvider: {_ -> Data in
@@ -21,10 +22,14 @@ extension ZIPFoundationTests {
                                              additionalDataProvider: {_ -> Data in
                                                 return Data() })
         XCTAssertNil(emptyLFH)
-        let emptyDD = Entry.DataDescriptor(data: Data(),
-                                           additionalDataProvider: {_ -> Data in
-                                            return Data() })
+        let emptyDD = Entry.DefaultDataDescriptor(data: Data(),
+                                                  additionalDataProvider: {_ -> Data in
+                                                    return Data() })
         XCTAssertNil(emptyDD)
+        let emptyZIP64DD = Entry.ZIP64DataDescriptor(data: Data(),
+                                                     additionalDataProvider: {_ -> Data in
+                                                        return Data() })
+        XCTAssertNil(emptyZIP64DD)
     }
 
     func testEntryInvalidSignatureErrorConditions() {
@@ -105,7 +110,7 @@ extension ZIPFoundationTests {
             XCTFail("Failed to read local file header.")
             return
         }
-        guard let entry = Entry(centralDirectoryStructure: central, localFileHeader: local, dataDescriptor: nil) else {
+        guard let entry = Entry(centralDirectoryStructure: central, localFileHeader: local) else {
             XCTFail("Failed to read entry.")
             return
         }
@@ -137,7 +142,7 @@ extension ZIPFoundationTests {
             XCTFail("Failed to read local file header.")
             return
         }
-        guard let entry = Entry(centralDirectoryStructure: central, localFileHeader: local, dataDescriptor: nil) else {
+        guard let entry = Entry(centralDirectoryStructure: central, localFileHeader: local) else {
             XCTFail("Failed to read entry.")
             return
         }
@@ -173,10 +178,34 @@ extension ZIPFoundationTests {
             XCTFail("Failed to read local file header.")
             return
         }
-        guard let entry = Entry(centralDirectoryStructure: central, localFileHeader: local, dataDescriptor: nil) else {
+        guard let entry = Entry(centralDirectoryStructure: central, localFileHeader: local) else {
             XCTFail("Failed to read entry.")
             return
         }
         XCTAssertTrue(entry.type == .directory)
+    }
+
+    func testEntryValidDataDescriptor() {
+        let ddBytes: [UInt8] = [0x50, 0x4b, 0x07, 0x08, 0x00, 0x00, 0x00, 0x00,
+                                0x0a, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00]
+        let dataDescriptor = Entry.DefaultDataDescriptor(data: Data(ddBytes),
+                                                         additionalDataProvider: {_ -> Data in
+                                                            return Data() })
+        XCTAssertEqual(dataDescriptor?.uncompressedSize, 10)
+        XCTAssertEqual(dataDescriptor?.compressedSize, 10)
+        // The DataDescriptor signature is not mandatory.
+        let ddBytesWithoutSignature: [UInt8] = [0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00,
+                                                0x0a, 0x00, 0x00, 0x00, 0x50, 0x4b, 0x07, 0x08]
+        let dataDescriptorWithoutSignature = Entry.DefaultDataDescriptor(data: Data(ddBytesWithoutSignature),
+                                                                         additionalDataProvider: {_ -> Data in
+                                                                            return Data() })
+        XCTAssertEqual(dataDescriptorWithoutSignature?.uncompressedSize, 10)
+        XCTAssertEqual(dataDescriptorWithoutSignature?.compressedSize, 10)
+    }
+
+    func testEntryIsCompressed() throws {
+        let archive = self.archive(for: #function, mode: .read)
+        XCTAssert(archive["compressed"]?.isCompressed == true)
+        XCTAssert(archive["uncompressed"]?.isCompressed == false)
     }
 }

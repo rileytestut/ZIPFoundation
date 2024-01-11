@@ -2,7 +2,7 @@
 //  ZIPFoundationReadingTests.swift
 //  ZIPFoundation
 //
-//  Copyright © 2017-2020 Thomas Zoechling, https://www.peakstep.com and the ZIP Foundation project authors.
+//  Copyright © 2017-2023 Thomas Zoechling, https://www.peakstep.com and the ZIP Foundation project authors.
 //  Released under the MIT License.
 //
 //  See https://github.com/weichsel/ZIPFoundation/blob/master/LICENSE for license information.
@@ -12,6 +12,7 @@ import XCTest
 @testable import ZIPFoundation
 
 extension ZIPFoundationTests {
+
     func testExtractUncompressedFolderEntries() {
         let archive = self.archive(for: #function, mode: .read)
         for entry in archive {
@@ -116,104 +117,62 @@ extension ZIPFoundationTests {
             return
         }
         XCTAssertNotNil(fileEntry)
-        do {
-            _ = try archive.extract(fileEntry, to: archive.url)
-        } catch let error as CocoaError {
-            XCTAssert(error.code == CocoaError.fileWriteFileExists)
-        } catch {
-            XCTFail("Unexpected error while trying to extract entry to existing URL.")
-            return
-        }
+        XCTAssertCocoaError(try archive.extract(fileEntry, to: archive.url),
+                            throwsErrorWithCode: .fileWriteFileExists)
         guard let linkEntry = archive["testZipItemLink"] else {
             XCTFail("Failed to obtain test asset from archive.")
             return
         }
-        do {
-            let longFileName = String(repeating: ProcessInfo.processInfo.globallyUniqueString, count: 100)
-            var overlongURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            overlongURL.appendPathComponent(longFileName)
-            _ = try archive.extract(fileEntry, to: overlongURL)
-        } catch let error as CocoaError {
-            XCTAssert(error.code == CocoaError.fileNoSuchFile)
-        } catch {
-            XCTFail("Unexpected error while trying to extract entry to invalid URL.")
-            return
-        }
+
+        let longFileName = String(repeating: ProcessInfo.processInfo.globallyUniqueString, count: 100)
+        var overlongURL = URL(fileURLWithPath: NSTemporaryDirectory())
+        overlongURL.appendPathComponent(longFileName)
+        XCTAssertPOSIXError(try archive.extract(fileEntry, to: overlongURL),
+                            throwsErrorWithCode: .ENAMETOOLONG)
         XCTAssertNotNil(linkEntry)
-        do {
-            _ = try archive.extract(linkEntry, to: archive.url)
-        } catch let error as CocoaError {
-            XCTAssert(error.code == CocoaError.fileWriteFileExists)
-        } catch {
-            XCTFail("Unexpected error while trying to extract link entry to existing URL.")
-            return
-        }
+        XCTAssertCocoaError(try archive.extract(linkEntry, to: archive.url),
+                            throwsErrorWithCode: .fileWriteFileExists)
     }
 
-    func testCorruptFileErrorConditions() {
+    func testCorruptFileErrorConditions() throws {
         let archiveURL = self.resourceURL(for: #function, pathExtension: "zip")
         let fileManager = FileManager()
         let destinationFileSystemRepresentation = fileManager.fileSystemRepresentation(withPath: archiveURL.path)
-        let destinationFile: UnsafeMutablePointer<FILE> = fopen(destinationFileSystemRepresentation, "r+b")
+        let destinationFile: FILEPointer = fopen(destinationFileSystemRepresentation, "r+b")
 
-        do {
-            fseek(destinationFile, 64, SEEK_SET)
-            // We have to inject a large enough zeroes block to guarantee that libcompression 
-            // detects the failure when reading the stream
-            _ = try Data.write(chunk: Data(count: 512*1024), to: destinationFile)
-            fclose(destinationFile)
-            guard let archive = Archive(url: archiveURL, accessMode: .read) else {
-                XCTFail("Failed to read archive.")
-                return
-            }
-            guard let entry = archive["data.random"] else {
-                XCTFail("Failed to read entry.")
-                return
-            }
-            _ = try archive.extract(entry, consumer: { _ in })
-        } catch let error as Data.CompressionError {
-            XCTAssert(error == Data.CompressionError.corruptedData)
-        } catch {
-            XCTFail("Unexpected error while testing an archive with corrupt entry data.")
+        fseek(destinationFile, 64, SEEK_SET)
+        // We have to inject a large enough zeroes block to guarantee that libcompression
+        // detects the failure when reading the stream
+        _ = try Data.write(chunk: Data(count: 512*1024), to: destinationFile)
+        fclose(destinationFile)
+        let archive = try Archive(url: archiveURL, accessMode: .read)
+        guard let entry = archive["data.random"] else {
+            XCTFail("Failed to read entry.")
+            return
         }
+        XCTAssertSwiftError(try archive.extract(entry, consumer: { _ in }),
+                            throws: Data.CompressionError.corruptedData)
     }
 
     func testCorruptSymbolicLinkErrorConditions() {
         let archive = self.archive(for: #function, mode: .read)
         for entry in archive {
-            do {
-                var tempFileURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                tempFileURL.appendPathComponent(ProcessInfo.processInfo.globallyUniqueString)
-                _ = try archive.extract(entry, to: tempFileURL)
-            } catch let error as Archive.ArchiveError {
-                XCTAssert(error == .invalidEntryPath)
-            } catch {
-                XCTFail("Unexpected error while trying to extract entry with invalid symbolic link.")
-            }
+            var tempFileURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            tempFileURL.appendPathComponent(ProcessInfo.processInfo.globallyUniqueString)
+            XCTAssertSwiftError(try archive.extract(entry, to: tempFileURL),
+                                throws: Archive.ArchiveError.invalidEntryPath)
         }
     }
 
     func testInvalidCompressionMethodErrorConditions() {
         let archive = self.archive(for: #function, mode: .read)
-        for entry in archive {
-            do {
-                _ = try archive.extract(entry, consumer: { (_) in })
-            } catch let error as Archive.ArchiveError {
-                XCTAssert(error == .invalidCompressionMethod)
-            } catch {
-                XCTFail("Unexpected error while trying to extract entry with invalid compression method link.")
-            }
+        guard let entry = archive[".DS_Store"] else {
+            XCTFail("Missing entry in test archive")
+            return
         }
-    }
 
-    func testExtractZIP64ArchiveErrorConditions() {
-        let archive = self.archive(for: #function, mode: .read)
-        var entriesRead = 0
-        for _ in archive {
-            entriesRead += 1
-        }
-        // We currently don't support ZIP64 so we expect failed initialization for entry objects.
-        XCTAssert(entriesRead == 0)
+        XCTAssertSwiftError(try archive.extract(entry, consumer: { (_) in }),
+                            throws: Archive.ArchiveError.invalidCompressionMethod)
     }
 
     func testExtractEncryptedArchiveErrorConditions() {
@@ -224,6 +183,33 @@ extension ZIPFoundationTests {
         }
         // We currently don't support encryption so we expect failed initialization for entry objects.
         XCTAssert(entriesRead == 0)
+    }
+
+    func testExtractInvalidBufferSizeErrorConditions() {
+        let archive = self.archive(for: #function, mode: .read)
+        let entry = archive["text.txt"]!
+        XCTAssertThrowsError(try archive.extract(entry, to: URL(fileURLWithPath: ""), bufferSize: 0, skipCRC32: true))
+        let archive2 = self.archive(for: #function, mode: .read)
+        let entry2 = archive2["text.txt"]!
+        XCTAssertThrowsError(try archive2.extract(entry2, bufferSize: 0, skipCRC32: true, consumer: { _ in }))
+    }
+
+    func testExtractUncompressedEmptyFile() {
+        // We had a logic error, where completion handlers for empty entries were not called
+        // Ensure that this edge case works
+        var didCallCompletion = false
+        let archive = self.archive(for: #function, mode: .read)
+        guard let entry = archive["empty.txt"] else { XCTFail("Failed to extract entry."); return }
+
+        do {
+            _ = try archive.extract(entry) { (data) in
+                XCTAssertEqual(data.count, 0)
+                didCallCompletion = true
+            }
+        } catch {
+            XCTFail("Unexpected error while trying to extract empty file of uncompressed archive.")
+        }
+        XCTAssert(didCallCompletion)
     }
 
     func testExtractUncompressedEntryCancelation() {
@@ -268,5 +254,32 @@ extension ZIPFoundationTests {
         nonExistantURL.appendPathComponent("invalid.path")
         let archive = self.archive(for: #function, mode: .update)
         XCTAssert(archive.totalUnitCountForAddingItem(at: nonExistantURL) == -1)
+    }
+
+    func testDetectEntryType() {
+        let archive = self.archive(for: #function, mode: .read)
+        let expectedData: [String: Entry.EntryType] = [
+            "META-INF/": .directory,
+            "META-INF/container.xml": .file
+        ]
+        for entry in archive {
+            XCTAssertEqual(entry.type, expectedData[entry.path])
+        }
+    }
+
+    func testCRC32Check() {
+        let fileManager = FileManager()
+        let archive = self.archive(for: #function, mode: .read)
+        let destinationURL = self.createDirectory(for: #function)
+        XCTAssertSwiftError(try fileManager.unzipItem(at: archive.url, to: destinationURL),
+                            throws: Archive.ArchiveError.invalidCRC32)
+    }
+
+    func testTraversalAttack() {
+        let fileManager = FileManager()
+        let archive = self.archive(for: #function, mode: .read)
+        let destinationURL = self.createDirectory(for: #function)
+        XCTAssertCocoaError(try fileManager.unzipItem(at: archive.url, to: destinationURL),
+                            throwsErrorWithCode: .fileReadInvalidFileName)
     }
 }

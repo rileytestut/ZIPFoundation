@@ -2,7 +2,7 @@
 //  ZIPFoundationMemoryTests.swift
 //  ZIPFoundation
 //
-//  Copyright © 2017-2020 Thomas Zoechling, https://www.peakstep.com and the ZIP Foundation project authors.
+//  Copyright © 2017-2023 Thomas Zoechling, https://www.peakstep.com and the ZIP Foundation project authors.
 //  Released under the MIT License.
 //
 //  See https://github.com/weichsel/ZIPFoundation/blob/master/LICENSE for license information.
@@ -16,6 +16,7 @@ import XCTest
 #if swift(>=5.0)
 
 extension ZIPFoundationTests {
+
     func testExtractUncompressedFolderEntriesFromMemory() {
         let archive = self.memoryArchive(for: #function, mode: .read)
         for entry in archive {
@@ -95,18 +96,59 @@ extension ZIPFoundationTests {
         XCTAssert(archive.checkIntegrity())
     }
 
-    func testMemoryArchiveErrorConditions() {
-        let data = Data.makeRandomData(size: 1024)
-        let invalidArchive = Archive(data: data, accessMode: .read)
-        XCTAssertNil(invalidArchive)
+    func testUpdateArchiveRemoveUncompressedEntryFromMemory() throws {
+        let archive = self.memoryArchive(for: #function, mode: .update)
+        XCTAssert(archive.checkIntegrity())
+        guard let entryToRemove = archive["original"] else {
+            XCTFail("Failed to find entry to remove from memory archive"); return
+        }
+        do {
+            try archive.remove(entryToRemove)
+        } catch {
+            XCTFail("Failed to remove entry from memory archive with error : \(error)")
+        }
+        XCTAssert(archive.checkIntegrity())
         // Trigger the code path that is taken if funopen() fails
         // We can only do this on Apple platforms
-        #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-        let systemAllocator = CFAllocatorGetDefault().takeUnretainedValue()
-        CFAllocatorSetDefault(kCFAllocatorNull)
-        let unallocatableArchive = Archive(data: data, accessMode: .read)
-        CFAllocatorSetDefault(systemAllocator)
-        XCTAssertNil(unallocatableArchive)
+        #if os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS)
+        let entryRemoval = {
+            self.XCTAssertSwiftError(try archive.remove(entryToRemove),
+                                     throws: Archive.ArchiveError.unreadableArchive)
+        }
+        self.runWithoutMemory {
+            try? entryRemoval()
+        }
+        let data = Data.makeRandomData(size: 1024)
+        let emptyArchive = try Archive(accessMode: .create)
+        let replacementArchive = try Archive(data: data, accessMode: .create)
+        // Trigger the error code path that is taken when no temporary archive
+        // can be created during replacement
+        replacementArchive.memoryFile = nil
+        let archiveReplacement = {
+            self.XCTAssertSwiftError(try emptyArchive.replaceCurrentArchive(with: replacementArchive),
+                                     throws: Archive.ArchiveError.unwritableArchive)
+        }
+        self.runWithoutMemory {
+            try? archiveReplacement()
+        }
+        #endif
+    }
+
+    func testMemoryArchiveErrorConditions() throws {
+        let data = Data.makeRandomData(size: 1024)
+        XCTAssertSwiftError(try Archive(data: data, accessMode: .read),
+                            throws: Archive.ArchiveError.missingEndOfCentralDirectoryRecord)
+        // Trigger the code path that is taken if funopen() fails
+        // We can only do this on Apple platforms
+        #if os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS)
+        let archiveCreation = {
+            self.XCTAssertSwiftError(try Archive(data: data, accessMode: .read),
+                                throws: Archive.ArchiveError.unreadableArchive)
+        }
+
+        self.runWithoutMemory {
+            try? archiveCreation()
+        }
         #endif
     }
 
@@ -139,7 +181,7 @@ extension ZIPFoundationTests {
     }
 
     func testWriteOnlyFile() {
-        let mem  = MemoryFile()
+        let mem = MemoryFile()
         let file = mem.open(mode: "w")
         XCTAssertEqual(fwrite("01234", 1, 5, file), 5)
         XCTAssertEqual(fseek(file, -2, SEEK_END), 0)
@@ -150,7 +192,7 @@ extension ZIPFoundationTests {
     }
 
     func testReadWriteFile() {
-        let mem  = MemoryFile(data: "witch".data(using: .utf8)!)
+        let mem = MemoryFile(data: "witch".data(using: .utf8)!)
         let file = mem.open(mode: "r+")
         XCTAssertEqual(fseek(file, 1, SEEK_CUR), 0)
         XCTAssertEqual(fwrite("a", 1, 1, file), 1)
@@ -158,10 +200,17 @@ extension ZIPFoundationTests {
         XCTAssertEqual(fwrite("face", 1, 4, file), 4)
         XCTAssertEqual(fflush(file), 0)
         XCTAssertEqual(mem.data, "watchface".data(using: .utf8))
+        // Also exercise the codepath where we explicitly seek beyond `data.count`
+        XCTAssertEqual(fseek(file, 10, SEEK_SET), 0)
+        XCTAssertEqual(fwrite("x", 1, 1, file), 1)
+        XCTAssertEqual(fseek(file, 2, SEEK_SET), 0)
+        XCTAssertEqual(fwrite("watchfaces", 10, 1, file), 1)
+        XCTAssertEqual(fseek(file, 2, SEEK_SET), 0)
+        XCTAssertEqual(fclose(file), 0)
     }
 
     func testAppendFile() {
-        let mem  = MemoryFile(data: "anti".data(using: .utf8)!)
+        let mem = MemoryFile(data: "anti".data(using: .utf8)!)
         let file = mem.open(mode: "a+")
         XCTAssertEqual(fwrite("cipation", 1, 8, file), 8)
         XCTAssertEqual(fflush(file), 0)
@@ -172,17 +221,16 @@ extension ZIPFoundationTests {
 // MARK: - Helpers
 
 extension ZIPFoundationTests {
+
     func memoryArchive(for testFunction: String, mode: Archive.AccessMode,
-                       preferredEncoding: String.Encoding? = nil) -> Archive {
+                       pathEncoding: String.Encoding? = nil) -> Archive {
         var sourceArchiveURL = ZIPFoundationTests.resourceDirectoryURL
         sourceArchiveURL.appendPathComponent(testFunction.replacingOccurrences(of: "()", with: ""))
         sourceArchiveURL.appendPathExtension("zip")
         do {
             let data = mode == .create ? Data() : try Data(contentsOf: sourceArchiveURL)
-            guard let archive = Archive(data: data, accessMode: mode,
-                                        preferredEncoding: preferredEncoding) else {
-                                            throw Archive.ArchiveError.unreadableArchive
-            }
+            let archive = try Archive(data: data, accessMode: mode,
+                                  pathEncoding: pathEncoding)
             return archive
         } catch {
             XCTFail("Failed to open memory archive for '\(sourceArchiveURL.lastPathComponent)'")
